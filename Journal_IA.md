@@ -140,3 +140,132 @@ Fichiers de documentation préparés pour la remise :
 Aucun autre fichier du projet n’a été modifié pour C1. Aucune classe, migration, dépendance ou configuration n’a été ajoutée. `raw_points` reste la seule donnée stockée. Aucun commit ni push n’a été effectué.
 
 État final des vérifications : les notes affichées par l’API, le relevé et le CSV correspondent à la règle retenue ; la notification Mailpit pour la soumission 2 est vérifiable ; `mvn test` et la réponse du `PUT` restent des éléments signalés par l’utilisateur, non des tests exécutés ou des sorties produites par l’IA.
+
+---
+
+# C2 — Notification par SMS
+
+## Échange 1 — Analyse de l’existant
+
+### Demande
+Démarrer le TD C2 sans réécrire le projet : vérifier le commit C1 sur le fork, analyser `PUT /submissions/{id}/grade`, localiser le numéro de téléphone et identifier les fichiers concernés.
+
+### Proposition de l'IA
+Vérification en lecture seule du dépôt et du code existant :
+
+- `origin/main` pointe sur le commit `6581a79` (« C1 »), identique à `HEAD` en local ; `upstream/main` reste sur le commit initial.
+- `SubmissionController.grade()` valide les points, récupère la soumission avec jointures, met à jour `raw_points`, `feedback` et `graded_at`, calcule la note pénalisée C1, envoie l’email puis retourne le JSON.
+- La requête SQL de `grade()` sélectionne déjà `st.phone`, mais ne l’utilise pas.
+- Le numéro est stocké dans `student.phone`, défini dans `schema.sql` et renseigné dans `data.sql`.
+- Aucune dépendance SMS ni service de messagerie n’existe dans le projet.
+
+### Décision personnelle
+Partir du fonctionnement actuel, sans réorganisation générale et sans Clean Architecture complète. Ne modifier ni le calcul C1 ni le fonctionnement de l’email.
+
+### Pourquoi
+Le besoin C2 porte uniquement sur l’ajout d’une notification SMS simulée. Les fichiers de notation et de relevé fonctionnent déjà ; les modifier augmenterait le risque de régression.
+
+### Vérification
+Analyse en lecture seule de `SubmissionController.java`, `schema.sql`, `data.sql`, `pom.xml`, `application.properties` et `compose.yaml`. Aucune modification à ce stade.
+
+## Échange 2 — Choix du mécanisme de notification
+
+### Demande
+Conserver l’email, simuler un SMS dans les logs, garder la note publiée même si le SMS échoue, et permettre un remplacement ultérieur du fournisseur sans modifier la logique de notation.
+
+### Proposition de l'IA
+Cinq options ont été présentées :
+
+1. log direct dans `grade()` : très court, mais fournisseur codé en dur et future modification du contrôleur ;
+2. interface + implémentation Spring : petite abstraction, remplacement simple, léger à mettre en place ;
+3. événements Spring : découplage maximal, mais plus de fichiers et de concepts, excessif pour ce TD ;
+4. bean lambda dans la configuration : évite une classe, mais rend la logique moins lisible ;
+5. véritable fournisseur SMS : hors périmètre, car il demanderait dépendance, clés et configuration réseau.
+
+### Décision personnelle
+Retenir l’option interface + implémentation, avec un contrat générique `MessageSender` plutôt qu’un `SmsSender` spécifique.
+
+### Pourquoi
+Le nom générique permet d’envisager un futur passage à WhatsApp sans changer `SubmissionController.java`. L’interface garde le code de notation dépendant d’une abstraction, pas d’un fournisseur concret. Les événements Spring et un vrai fournisseur étaient trop lourds pour une simulation pédagogique.
+
+### Vérification
+Aucune dépendance externe n’a été ajoutée. Le diff final ne concerne que deux nouveaux fichiers et `SubmissionController.java`.
+
+## Échange 3 — Implémentation retenue
+
+### Demande
+Appliquer uniquement les modifications autorisées : créer le contrat et l’implémentation de simulation, puis intégrer l’envoi SMS après l’email.
+
+### Proposition de l'IA
+- `MessageSender.java` : interface avec `void send(String phone, String message)`.
+- `LoggingMessageSender.java` : implémentation Spring qui affiche le SMS simulé dans les logs ; une propriété `kilasy.sms.fail`, lue par défaut à `false`, permet de simuler une panne en levant une exception.
+- `SubmissionController.java` : injection de `MessageSender`, lecture du numéro déjà présent dans la ligne SQL, formatage de la note avec une virgule décimale (`14,4/20`), envoi SMS dans un `try/catch` indépendant.
+
+### Décision personnelle
+Créer `MessageSender.java` et `LoggingMessageSender.java`, puis ajouter le bloc SMS après l’email existant. Si `phone` est absent ou vide, le SMS est ignoré. En cas d’exception, le message d’échec est journalisé et la réponse HTTP reste normale.
+
+### Pourquoi
+L’email et la note C1 restent inchangés. Isoler le SMS dans son propre `try/catch` garantit qu’une panne de messagerie n’empêche jamais la publication de la note. Le format français est appliqué uniquement au SMS, sans toucher à l’email.
+
+### Vérification
+Le diff montre trois fichiers : les deux nouveaux fichiers de messagerie et `SubmissionController.java`. Aucun fichier SQL, relevé, CSV, configuration ni journal de debug n’a été modifié pendant l’implémentation.
+
+## Échange 4 — Tests et simulation de panne
+
+### Demande
+Documenter les tests réalisés par l’utilisateur, y compris la simulation de panne SMS, sans inventer de sorties.
+
+### Proposition de l'IA
+Distinguer les résultats signalés par l’utilisateur de ceux réellement observés par l’IA. La simulation de panne est provoquée au démarrage avec :
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.arguments="--kilasy.sms.fail=true"
+```
+
+### Décision personnelle
+Enregistrer les résultats de tests comme « signalés par l’utilisateur comme réussis ». Ne pas attribuer ces exécutions à l’IA.
+
+### Pourquoi
+L’IA n’a pas exécuté Maven ni les appels HTTP après l’implémentation C2. Consigner ces tests comme si elle les avait lancés serait inexact.
+
+### Vérification
+Résultats signalés par l’utilisateur comme réussis :
+
+- compilation et tests Maven réussis ;
+- envoi normal : email envoyé et SMS simulé visible dans les logs ;
+- pour Bob, la note finale affichée dans le SMS est `14,4/20` ;
+- simulation de panne avec `--kilasy.sms.fail=true` réussie : malgré l’exception SMS, la note reste publiée et consultable ;
+- aucun fournisseur SMS réel n’a été utilisé.
+
+Aucun test n’a été exécuté par l’IA après les modifications C2.
+
+## Échange 5 — Préparation de la trace de remise
+
+### Demande
+Ajouter la trace C2 à la fin de `Journal_IA.md`, après une séparation Markdown, sans réécrire la partie C1.
+
+### Proposition de l'IA
+Conserver intégralement la partie C1, ajouter `---`, puis le titre `# C2 — Notification par SMS`, suivi des échanges, du bilan et des fichiers modifiés.
+
+### Décision personnelle
+N’ajouter que cette section au journal. Ne pas modifier les fichiers Java, SQL, la configuration ou `Journal_IA_debug.md`. Ne faire ni `add`, ni commit, ni push.
+
+### Pourquoi
+La partie C1 doit rester intacte pour la remise. La nouvelle partie documente seulement les choix C2 et leur contexte.
+
+### Vérification
+La partie C1 est conservée sans réécriture. Le journal de debug reste inchangé. Aucune commande Git d’indexation ou de publication n’est exécutée.
+
+## Bilan final et fichiers modifiés
+
+Fichiers modifiés pour C2 :
+
+- `src/main/java/hei/school/SubmissionController.java` : injection de `MessageSender`, envoi SMS après l’email, gestion des numéros absents, formatage français de la note et `try/catch` isolé ;
+- `src/main/java/hei/school/MessageSender.java` : définition du contrat `send(String phone, String message)` ;
+- `src/main/java/hei/school/LoggingMessageSender.java` : simulation de l’envoi dans les logs et simulation de panne via `kilasy.sms.fail`.
+
+Non modifiés : le calcul de pénalité C1, l’email, les fichiers SQL, le relevé, le CSV, la configuration et `Journal_IA_debug.md`.
+
+Conclusion technique : un futur passage à WhatsApp nécessiterait de remplacer l’implémentation de `MessageSender` et éventuellement sa configuration, sans modifier le code de notation dans `SubmissionController.java`. Le contrôleur dépend de l’abstraction `MessageSender`, pas d’un fournisseur concret.
+
+Durée réelle passée sur C2 : **2 heures**.

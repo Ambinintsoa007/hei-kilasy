@@ -30,6 +30,9 @@ public class SubmissionController {
     @Autowired
     private JavaMailSender mailSender;
 
+    @Autowired
+    private MessageSender messageSender;
+
     private BigDecimal penalizedGrade(double points, double max, LocalDate deadline, LocalDateTime submittedAt) {
         BigDecimal raw = BigDecimal.valueOf(points);
         BigDecimal maxBd = BigDecimal.valueOf(max);
@@ -169,6 +172,21 @@ public class SubmissionController {
         message.setText(text);
         mailSender.send(message);
         System.out.println("Email de note envoyé à " + row.get("email"));
+
+        try {
+            Object phone = row.get("phone");
+            if (phone == null || phone.toString().isBlank()) {
+                System.out.println("SMS ignoré pour la soumission " + id + " : numéro de téléphone absent");
+            } else {
+                String smsText = "Bonjour " + firstName + ",\n"
+                        + "Ta note pour « " + title + " » est disponible : "
+                        + grade.toPlainString().replace('.', ',') + "/20.\n"
+                        + "L'équipe Kilasy";
+                messageSender.send(phone.toString(), smsText);
+            }
+        } catch (Exception e) {
+            System.out.println("Échec de l'envoi SMS pour la soumission " + id + " : " + e.getMessage());
+        }
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", id);
