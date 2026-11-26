@@ -1,6 +1,7 @@
 package hei.school;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -28,6 +29,19 @@ public class SubmissionController {
 
     @Autowired
     private JavaMailSender mailSender;
+
+    private BigDecimal penalizedGrade(double points, double max, LocalDate deadline, LocalDateTime submittedAt) {
+        BigDecimal raw = BigDecimal.valueOf(points);
+        BigDecimal maxBd = BigDecimal.valueOf(max);
+        long days = Math.max(0, submittedAt.toLocalDate().toEpochDay() - deadline.toEpochDay());
+        BigDecimal penalty = BigDecimal.valueOf(days)
+                .multiply(new BigDecimal("0.10"))
+                .min(new BigDecimal("0.50"));
+        BigDecimal base = raw.multiply(new BigDecimal("20")).divide(maxBd, 10, RoundingMode.HALF_UP);
+        return base.multiply(BigDecimal.ONE.subtract(penalty))
+                .max(BigDecimal.ZERO)
+                .setScale(1, RoundingMode.HALF_UP);
+    }
 
     @PostMapping("/exercises/{id}/submissions")
     public ResponseEntity<?> submit(@PathVariable long id, @RequestBody Map<String, Object> body) {
@@ -99,7 +113,7 @@ public class SubmissionController {
             double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
             double max = ((BigDecimal) row.get("max_points")).doubleValue();
             result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            result.put("grade", penalizedGrade(raw, max, deadline, submittedAt));
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -130,11 +144,12 @@ public class SubmissionController {
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
+
+        // grade out of 20, with late penalty
+        BigDecimal grade = penalizedGrade(points, max, deadline, submittedAt);
+
         boolean late = submittedAt.toLocalDate().isAfter(deadline);
 
         // notify the student by email

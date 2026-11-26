@@ -24,6 +24,17 @@ public class GradeReport {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    private BigDecimal penalizedGrade(BigDecimal raw, BigDecimal max, LocalDate deadline, LocalDateTime submittedAt) {
+        long days = Math.max(0, submittedAt.toLocalDate().toEpochDay() - deadline.toEpochDay());
+        BigDecimal penalty = BigDecimal.valueOf(days)
+                .multiply(new BigDecimal("0.10"))
+                .min(new BigDecimal("0.50"));
+        BigDecimal base = raw.multiply(new BigDecimal("20")).divide(max, 10, RoundingMode.HALF_UP);
+        return base.multiply(BigDecimal.ONE.subtract(penalty))
+                .max(BigDecimal.ZERO)
+                .setScale(1, RoundingMode.HALF_UP);
+    }
+
     public Map<String, Object> build(long studentId) {
         List<Map<String, Object>> students = jdbcTemplate.queryForList("SELECT * FROM student WHERE id = ?", studentId);
         if (students.isEmpty()) {
@@ -63,7 +74,7 @@ public class GradeReport {
                 } else {
                     BigDecimal raw = (BigDecimal) row.get("raw_points");
                     BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
+                    BigDecimal grade = penalizedGrade(raw, max, deadline, submittedAt);
                     line.put("status", "CORRIGÉ");
                     line.put("grade", grade);
                     line.put("feedback", row.get("feedback"));

@@ -1,6 +1,7 @@
 package hei.school;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Map;
 
@@ -19,6 +20,19 @@ public class CsvExport {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    private BigDecimal penalizedGrade(BigDecimal raw, BigDecimal max, Object deadline, Object submittedAt) {
+        long d = ((java.sql.Date) deadline).toLocalDate().toEpochDay();
+        long s = ((java.sql.Timestamp) submittedAt).toLocalDateTime().toLocalDate().toEpochDay();
+        long days = Math.max(0, s - d);
+        BigDecimal penalty = BigDecimal.valueOf(days)
+                .multiply(new BigDecimal("0.10"))
+                .min(new BigDecimal("0.50"));
+        BigDecimal base = raw.multiply(new BigDecimal("20")).divide(max, 10, RoundingMode.HALF_UP);
+        return base.multiply(BigDecimal.ONE.subtract(penalty))
+                .max(BigDecimal.ZERO)
+                .setScale(1, RoundingMode.HALF_UP);
+    }
+
     @GetMapping("/exports/grades.csv")
     public ResponseEntity<String> export() {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -32,10 +46,10 @@ public class CsvExport {
         for (Map<String, Object> row : rows) {
             String note = "";
             if (row.get("raw_points") != null) {
-                double n = ((BigDecimal) row.get("raw_points")).doubleValue()
-                        / ((BigDecimal) row.get("max_points")).doubleValue() * 20;
-                n = Math.floor(n * 10) / 10;
-                note = String.valueOf(n).replace('.', ',');
+                BigDecimal raw = (BigDecimal) row.get("raw_points");
+                BigDecimal max = (BigDecimal) row.get("max_points");
+                BigDecimal n = penalizedGrade(raw, max, row.get("deadline"), row.get("submitted_at"));
+                note = n.toPlainString().replace('.', ',');
             }
             csv.append(row.get("reference")).append(';')
                     .append(row.get("full_name")).append(';')
